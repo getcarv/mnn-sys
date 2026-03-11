@@ -1,0 +1,26 @@
+[package]
+build       = "build.rs"
+description = "Raw FFI bindings to MNN (Mobile Neural Network)"
+edition     = "2021"
+license     = "Apache-2.0"
+links       = "MNN"
+name        = "mnn-sys"
+version     = "0.1.0"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.72"
+cc      = "1.2"
+cmake   = "0.1"
+
+[features]
+default = [ "build-mnn" ]
+# Build MNN from source (requires cmake and a C++ compiler)
+build-mnn = [  ]
+# Use system-installed MNN library
+system-mnn = [  ]
+# Enable Metal backend (macOS/iOS only)
+metal = [  ]
+# Enable CoreML backend (macOS/iOS only)
+coreml = [  ]
