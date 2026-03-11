@@ -1,3 +1,3 @@
 [submodule "MNN"]
 	path = MNN
-	url = git@github.com:getcarv/MNN.git
+	url = https://github.com/getcarv/MNN.git
