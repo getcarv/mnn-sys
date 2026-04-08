@@ -13,6 +13,11 @@ fn target_arch() -> String {
 }
 
 #[cfg(feature = "build-mnn")]
+fn target() -> String {
+    env::var("TARGET").unwrap_or_default()
+}
+
+#[cfg(feature = "build-mnn")]
 fn is_ios() -> bool {
     target_os() == "ios"
 }
@@ -40,6 +45,29 @@ fn is_windows() -> bool {
 #[cfg(feature = "build-mnn")]
 fn is_android() -> bool {
     target_os() == "android"
+}
+
+#[cfg(feature = "build-mnn")]
+fn apple_sdk_name() -> Option<&'static str> {
+    let target = target();
+
+    if target.ends_with("-apple-ios-sim") || target.ends_with("-apple-tvos-sim") || target.ends_with("-apple-watchos-sim")
+    {
+        Some(match target_os().as_str() {
+            "ios" => "iphonesimulator",
+            "tvos" => "appletvsimulator",
+            "watchos" => "watchsimulator",
+            _ => return None,
+        })
+    } else if target.ends_with("-apple-ios") {
+        Some("iphoneos")
+    } else if target.ends_with("-apple-tvos") {
+        Some("appletvos")
+    } else if target.ends_with("-apple-watchos") {
+        Some("watchos")
+    } else {
+        None
+    }
 }
 
 fn main() {
@@ -100,17 +128,21 @@ fn build_mnn(mnn_dir: &Path, _out_dir: &Path) -> PathBuf {
 
     // iOS-specific configurations - use MNN's official toolchain file
     if is_ios() {
-        let arch = target_arch();
+        let target = target();
         let toolchain_file = mnn_dir.join("cmake/ios.toolchain.cmake");
 
         // Use MNN's iOS toolchain file (this is how MNN officially builds for iOS)
         config.define("CMAKE_TOOLCHAIN_FILE", toolchain_file.to_str().unwrap());
 
         // Set platform and architecture
-        let (platform, cmake_arch) = match arch.as_str() {
-            "aarch64" | "arm64" => ("OS64", "arm64"),
-            "x86_64" => ("SIMULATOR64", "x86_64"),
-            _ => ("OS64", "arm64"),
+        let (platform, cmake_arch) = match target.as_str() {
+            "aarch64-apple-ios" => ("OS64", "arm64"),
+            "aarch64-apple-ios-sim" => ("SIMULATOR64", "arm64"),
+            "x86_64-apple-ios" | "x86_64-apple-ios-sim" => ("SIMULATOR64", "x86_64"),
+            _ => match target_arch().as_str() {
+                "x86_64" => ("SIMULATOR64", "x86_64"),
+                _ => ("OS64", "arm64"),
+            },
         };
         config.define("PLATFORM", platform);
         config.define("ARCHS", cmake_arch);
@@ -184,17 +216,22 @@ fn build_wrapper(manifest_dir: &Path, mnn_include_dir: &Path, mnn_lib_dir: &Path
 
     // iOS-specific compiler configuration
     if is_ios() {
-        let arch = target_arch();
-        let sdk = if arch == "aarch64" || arch == "arm64" { "iphoneos" } else { "iphonesimulator" };
+        if let Some(sdk) = apple_sdk_name() {
+            let sdk_path = std::process::Command::new("xcrun")
+                .args(["--sdk", sdk, "--show-sdk-path"])
+                .output()
+                .expect("Failed to get iOS SDK path")
+                .stdout;
+            let sdk_path = String::from_utf8_lossy(&sdk_path).trim().to_string();
 
-        let sdk_path = std::process::Command::new("xcrun")
-            .args(["--sdk", sdk, "--show-sdk-path"])
-            .output()
-            .expect("Failed to get iOS SDK path")
-            .stdout;
-        let sdk_path = String::from_utf8_lossy(&sdk_path).trim().to_string();
+            build.flag("-isysroot").flag(&sdk_path);
 
-        build.flag("-isysroot").flag(&sdk_path).flag("-miphoneos-version-min=12.0");
+            if sdk == "iphonesimulator" {
+                build.flag("-mios-simulator-version-min=12.0");
+            } else {
+                build.flag("-miphoneos-version-min=12.0");
+            }
+        }
     }
 
     build.compile("mnn_wrapper");
