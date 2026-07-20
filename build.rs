@@ -38,6 +38,11 @@ fn is_linux() -> bool {
 }
 
 #[cfg(feature = "build-mnn")]
+fn is_musl() -> bool {
+    env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|target_env| target_env == "musl")
+}
+
+#[cfg(feature = "build-mnn")]
 fn is_windows() -> bool {
     target_os() == "windows"
 }
@@ -234,6 +239,21 @@ fn build_wrapper(manifest_dir: &Path, mnn_include_dir: &Path, mnn_lib_dir: &Path
         }
     }
 
+    if is_linux() && is_musl() {
+        build.cpp_link_stdlib(None);
+        let compiler = build.get_compiler();
+        let output = compiler
+            .to_command()
+            .arg("-print-file-name=libstdc++.a")
+            .output()
+            .expect("Failed to locate static libstdc++");
+        assert!(output.status.success(), "C++ compiler failed to locate static libstdc++");
+        let library = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        assert!(library.is_absolute(), "C++ compiler did not find static libstdc++");
+        let library_dir = library.parent().expect("Static libstdc++ path has no parent directory");
+        println!("cargo:rustc-link-search=native={}", library_dir.display());
+    }
+
     build.compile("mnn_wrapper");
 
     // Link the MNN static library
@@ -269,7 +289,11 @@ fn build_wrapper(manifest_dir: &Path, mnn_include_dir: &Path, mnn_lib_dir: &Path
     }
 
     if is_linux() {
-        println!("cargo:rustc-link-lib=stdc++");
+        if is_musl() {
+            println!("cargo:rustc-link-lib=static=stdc++");
+        } else {
+            println!("cargo:rustc-link-lib=stdc++");
+        }
     }
 
     if is_windows() {
