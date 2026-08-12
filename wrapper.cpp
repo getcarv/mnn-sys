@@ -11,7 +11,6 @@
 #include <MNN/expr/Executor.hpp>
 #include <MNN/expr/ExecutorScope.hpp>
 #include <MNN/expr/NeuralNetWorkOp.hpp>
-#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -446,43 +445,32 @@ MNNC_Module* mnnc_module_load(
 
     MNN::Express::Module::Config modConfig;
     modConfig.shapeMutable = !config || config->shape_mutable != 0;
-    modConfig.rearrange = std::getenv("MNN_REARRANGE") != nullptr;
+    modConfig.rearrange = config && config->rearrange != 0;
 
-    MNN::Express::Module::BackendInfo backend;
     MNN::BackendConfig backendConfig;
-    MNN::ScheduleConfig scheduleConfig;
+    MNNForwardType forwardType = MNN_FORWARD_CPU;
+    int numThreads = 4;
     if (config) {
-        backend.type = static_cast<MNNForwardType>(config->forward_type);
+        forwardType = static_cast<MNNForwardType>(config->forward_type);
+        numThreads = config->num_threads;
         backendConfig.precision = static_cast<MNN::BackendConfig::PrecisionMode>(config->precision);
         backendConfig.power = static_cast<MNN::BackendConfig::PowerMode>(config->power);
         backendConfig.memory = static_cast<MNN::BackendConfig::MemoryMode>(config->memory);
-        backend.config = &backendConfig;
-        modConfig.backend = &backend;
-        scheduleConfig.type = backend.type;
-        scheduleConfig.numThread = config->num_threads;
-        scheduleConfig.backendConfig = &backendConfig;
     }
 
     auto executor = MNN::Express::Executor::newExecutor(
-        scheduleConfig.type,
+        forwardType,
         backendConfig,
-        scheduleConfig.numThread
+        numThreads
     );
     if (!executor) return nullptr;
 
-    // Express resolves VARPs through the thread-local current executor. Keep module
-    // construction, inference, and destruction in the scope that owns its runtimes.
     MNN::Express::ExecutorScope scope(executor);
-    std::shared_ptr<MNN::Express::Executor::RuntimeManager> runtimeManager(
-        MNN::Express::Executor::RuntimeManager::createRuntimeManager(scheduleConfig),
-        MNN::Express::Executor::RuntimeManager::destroy
-    );
-    if (!runtimeManager) return nullptr;
+    executor->setGlobalExecutorConfig(forwardType, backendConfig, numThreads);
 
     auto* module = MNN::Express::Module::load(
         inputs, outputs,
         reinterpret_cast<const uint8_t*>(buffer), size,
-        runtimeManager,
         &modConfig
     );
     if (!module) return nullptr;
