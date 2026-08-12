@@ -431,6 +431,7 @@ void mnnc_debug_print_io(MNNC_Interpreter* interpreter, MNNC_Session* session);
  */
 typedef struct {
     int shape_mutable;    /* 1 for dynamic shapes, 0 for static */
+    int rearrange;        /* 1 to rearrange model weights, 0 to preserve their layout */
     MNNC_ForwardType forward_type;
     int num_threads;
     int precision;  /* 0: normal, 1: high, 2: low, 3: low with BF16 */
