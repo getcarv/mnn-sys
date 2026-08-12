@@ -9,9 +9,17 @@
 #include <MNN/MNNDefine.h>
 #include <MNN/expr/Module.hpp>
 #include <MNN/expr/Executor.hpp>
+#include <MNN/expr/ExecutorScope.hpp>
 #include <MNN/expr/NeuralNetWorkOp.hpp>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <vector>
+
+struct MNNC_Module {
+    std::shared_ptr<MNN::Express::Executor> executor;
+    MNN::Express::Module* module;
+};
 
 /* ============ Interpreter API ============ */
 
@@ -437,11 +445,12 @@ MNNC_Module* mnnc_module_load(
     }
 
     MNN::Express::Module::Config modConfig;
-    modConfig.shapeMutable = true;  // Enable dynamic shapes
-    modConfig.rearrange = false;
+    modConfig.shapeMutable = !config || config->shape_mutable != 0;
+    modConfig.rearrange = std::getenv("MNN_REARRANGE") != nullptr;
 
     MNN::Express::Module::BackendInfo backend;
     MNN::BackendConfig backendConfig;
+    MNN::ScheduleConfig scheduleConfig;
     if (config) {
         backend.type = static_cast<MNNForwardType>(config->forward_type);
         backendConfig.precision = static_cast<MNN::BackendConfig::PrecisionMode>(config->precision);
@@ -449,20 +458,43 @@ MNNC_Module* mnnc_module_load(
         backendConfig.memory = static_cast<MNN::BackendConfig::MemoryMode>(config->memory);
         backend.config = &backendConfig;
         modConfig.backend = &backend;
+        scheduleConfig.type = backend.type;
+        scheduleConfig.numThread = config->num_threads;
+        scheduleConfig.backendConfig = &backendConfig;
     }
+
+    auto executor = MNN::Express::Executor::newExecutor(
+        scheduleConfig.type,
+        backendConfig,
+        scheduleConfig.numThread
+    );
+    if (!executor) return nullptr;
+
+    // Express resolves VARPs through the thread-local current executor. Keep module
+    // construction, inference, and destruction in the scope that owns its runtimes.
+    MNN::Express::ExecutorScope scope(executor);
+    std::shared_ptr<MNN::Express::Executor::RuntimeManager> runtimeManager(
+        MNN::Express::Executor::RuntimeManager::createRuntimeManager(scheduleConfig),
+        MNN::Express::Executor::RuntimeManager::destroy
+    );
+    if (!runtimeManager) return nullptr;
 
     auto* module = MNN::Express::Module::load(
         inputs, outputs,
         reinterpret_cast<const uint8_t*>(buffer), size,
+        runtimeManager,
         &modConfig
     );
+    if (!module) return nullptr;
 
-    return reinterpret_cast<MNNC_Module*>(module);
+    return new MNNC_Module{executor, module};
 }
 
 void mnnc_module_destroy(MNNC_Module* module) {
     if (module) {
-        MNN::Express::Module::destroy(reinterpret_cast<MNN::Express::Module*>(module));
+        MNN::Express::ExecutorScope scope(module->executor);
+        MNN::Express::Module::destroy(module->module);
+        delete module;
     }
 }
 
@@ -487,7 +519,7 @@ MNNC_ErrorCode mnnc_module_forward(
         return MNNC_ERROR_INVALID_ARGUMENT;
     }
 
-    auto* mod = reinterpret_cast<MNN::Express::Module*>(module);
+    MNN::Express::ExecutorScope scope(module->executor);
 
     // Convert input tensors to VARP
     std::vector<MNN::Express::VARP> inputVars;
@@ -511,7 +543,7 @@ MNNC_ErrorCode mnnc_module_forward(
     }
 
     // Run forward
-    auto outputVars = mod->onForward(inputVars);
+    auto outputVars = module->module->onForward(inputVars);
 
     if (outputVars.empty()) {
         return MNNC_ERROR_COMPUTE;
