@@ -10,6 +10,7 @@
 #include <MNN/expr/Module.hpp>
 #include <MNN/expr/Executor.hpp>
 #include <MNN/expr/NeuralNetWorkOp.hpp>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -416,6 +417,16 @@ void mnnc_debug_print_io(MNNC_Interpreter* interpreter, MNNC_Session* session) {
 
 /* ============ Module API ============ */
 
+static uint64_t mnnc_buffer_fingerprint(const void* buffer, size_t size) {
+    const auto* bytes = static_cast<const uint8_t*>(buffer);
+    uint64_t fingerprint = 14695981039346656037ULL;
+    for (size_t i = 0; i < size; ++i) {
+        fingerprint ^= bytes[i];
+        fingerprint *= 1099511628211ULL;
+    }
+    return fingerprint;
+}
+
 MNNC_Module* mnnc_module_load(
     const void* buffer,
     size_t size,
@@ -426,6 +437,7 @@ MNNC_Module* mnnc_module_load(
     const MNNC_ModuleConfig* config
 ) {
     if (!buffer || size == 0) return nullptr;
+    const auto entryFingerprint = mnnc_buffer_fingerprint(buffer, size);
 
     std::vector<std::string> inputs;
     for (int i = 0; i < input_count; i++) {
@@ -451,8 +463,10 @@ MNNC_Module* mnnc_module_load(
         backendConfig.memory = static_cast<MNN::BackendConfig::MemoryMode>(config->memory);
     }
     scheduleConfig.backendConfig = &backendConfig;
+    const auto beforeRuntimeFingerprint = mnnc_buffer_fingerprint(buffer, size);
 
     auto runtime = MNN::Interpreter::createRuntime({scheduleConfig});
+    const auto afterRuntimeFingerprint = mnnc_buffer_fingerprint(buffer, size);
     std::shared_ptr<MNN::Express::Executor::RuntimeManager> runtimeManager(
         MNN::Express::Executor::RuntimeManager::createRuntimeManager(scheduleConfig, runtime),
         MNN::Express::Executor::RuntimeManager::destroy
@@ -465,6 +479,17 @@ MNNC_Module* mnnc_module_load(
         runtimeManager,
         &modConfig
     );
+    if (!module) {
+        const auto afterLoadFingerprint = mnnc_buffer_fingerprint(buffer, size);
+        MNN_PRINT(
+            "MNNC module buffer size=%zu fingerprints entry=%016llx before-runtime=%016llx after-runtime=%016llx after-load=%016llx\n",
+            size,
+            static_cast<unsigned long long>(entryFingerprint),
+            static_cast<unsigned long long>(beforeRuntimeFingerprint),
+            static_cast<unsigned long long>(afterRuntimeFingerprint),
+            static_cast<unsigned long long>(afterLoadFingerprint)
+        );
+    }
     return reinterpret_cast<MNNC_Module*>(module);
 }
 
