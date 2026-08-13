@@ -452,8 +452,9 @@ MNNC_Module* mnnc_module_load(
     }
     scheduleConfig.backendConfig = &backendConfig;
 
+    auto runtime = MNN::Interpreter::createRuntime({scheduleConfig});
     std::shared_ptr<MNN::Express::Executor::RuntimeManager> runtimeManager(
-        MNN::Express::Executor::RuntimeManager::createRuntimeManager(scheduleConfig),
+        MNN::Express::Executor::RuntimeManager::createRuntimeManager(scheduleConfig, runtime),
         MNN::Express::Executor::RuntimeManager::destroy
     );
     if (!runtimeManager) return nullptr;
